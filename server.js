@@ -45,13 +45,144 @@ loadEnvFile(".env.example");
 
 const PORT = process.env.PORT || 3000;
 const HOST = "0.0.0.0";
-const ZHIPU_API_KEY = process.env.ZHIPU_API_KEY || "";
-const ZHIPU_MODEL = process.env.ZHIPU_MODEL || "glm-4-flash";
-const ZHIPU_URL =
-  process.env.ZHIPU_URL || "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 const MAX_CONTEXT_MESSAGES = Number.parseInt(process.env.MAX_CONTEXT_MESSAGES || "20", 10);
 const SESSION_TTL_MS =
   Number.parseInt(process.env.SESSION_TTL_MS || `${1000 * 60 * 60 * 2}`, 10);
+const DEFAULT_TEMPERATURE = Number.parseFloat(process.env.DEFAULT_TEMPERATURE || "0.7");
+
+const PROVIDERS = {
+  zhipu: {
+    id: "zhipu",
+    name: "Zhipu AI",
+    apiKeyEnv: "ZHIPU_API_KEY",
+    apiKey: process.env.ZHIPU_API_KEY || "",
+    url:
+      process.env.ZHIPU_URL || "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+    defaultModel: process.env.ZHIPU_MODEL || "glm-4-flash",
+    thinkingModel: process.env.ZHIPU_THINKING_MODEL || "glm-z1-flash"
+  },
+  deepseek: {
+    id: "deepseek",
+    name: "DeepSeek",
+    apiKeyEnv: "DEEPSEEK_API_KEY",
+    apiKey: process.env.DEEPSEEK_API_KEY || "",
+    url: process.env.DEEPSEEK_URL || "https://api.deepseek.com/chat/completions",
+    defaultModel: process.env.DEEPSEEK_MODEL || "deepseek-chat",
+    thinkingModel: process.env.DEEPSEEK_THINKING_MODEL || "deepseek-reasoner"
+  },
+  qwen: {
+    id: "qwen",
+    name: "Qwen (DashScope Compatible)",
+    apiKeyEnv: "QWEN_API_KEY",
+    apiKey: process.env.QWEN_API_KEY || "",
+    url:
+      process.env.QWEN_URL ||
+      "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    defaultModel: process.env.QWEN_MODEL || "qwen-plus",
+    thinkingModel: process.env.QWEN_THINKING_MODEL || "qwen-plus"
+  },
+  moonshot: {
+    id: "moonshot",
+    name: "Moonshot (Kimi)",
+    apiKeyEnv: "MOONSHOT_API_KEY",
+    apiKey: process.env.MOONSHOT_API_KEY || "",
+    url: process.env.MOONSHOT_URL || "https://api.moonshot.cn/v1/chat/completions",
+    defaultModel: process.env.MOONSHOT_MODEL || "moonshot-v1-8k",
+    thinkingModel: process.env.MOONSHOT_THINKING_MODEL || "moonshot-v1-8k"
+  },
+  minimax: {
+    id: "minimax",
+    name: "MiniMax",
+    apiKeyEnv: "MINIMAX_API_KEY",
+    apiKey: process.env.MINIMAX_API_KEY || "",
+    url: process.env.MINIMAX_URL || "https://api.minimax.io/v1/chat/completions",
+    defaultModel: process.env.MINIMAX_MODEL || "MiniMax-M2.5",
+    thinkingModel: process.env.MINIMAX_THINKING_MODEL || "MiniMax-M2.5"
+  },
+  openai: {
+    id: "openai",
+    name: "OpenAI",
+    apiKeyEnv: "OPENAI_API_KEY",
+    apiKey: process.env.OPENAI_API_KEY || "",
+    url: process.env.OPENAI_URL || "https://api.openai.com/v1/chat/completions",
+    defaultModel: process.env.OPENAI_MODEL || "gpt-4o-mini",
+    thinkingModel: process.env.OPENAI_THINKING_MODEL || "gpt-4o-mini"
+  },
+  xai: {
+    id: "xai",
+    name: "xAI (Grok)",
+    apiKeyEnv: "XAI_API_KEY",
+    apiKey: process.env.XAI_API_KEY || "",
+    url: process.env.XAI_URL || "https://api.x.ai/v1/chat/completions",
+    defaultModel: process.env.XAI_MODEL || "grok-3-mini",
+    thinkingModel: process.env.XAI_THINKING_MODEL || "grok-3-mini"
+  },
+  openrouter: {
+    id: "openrouter",
+    name: "OpenRouter",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    apiKey: process.env.OPENROUTER_API_KEY || "",
+    url: process.env.OPENROUTER_URL || "https://openrouter.ai/api/v1/chat/completions",
+    defaultModel: process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
+    thinkingModel: process.env.OPENROUTER_THINKING_MODEL || "openai/gpt-4o-mini"
+  },
+  groq: {
+    id: "groq",
+    name: "Groq",
+    apiKeyEnv: "GROQ_API_KEY",
+    apiKey: process.env.GROQ_API_KEY || "",
+    url: process.env.GROQ_URL || "https://api.groq.com/openai/v1/chat/completions",
+    defaultModel: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+    thinkingModel: process.env.GROQ_THINKING_MODEL || "llama-3.3-70b-versatile"
+  },
+  mistral: {
+    id: "mistral",
+    name: "Mistral",
+    apiKeyEnv: "MISTRAL_API_KEY",
+    apiKey: process.env.MISTRAL_API_KEY || "",
+    url: process.env.MISTRAL_URL || "https://api.mistral.ai/v1/chat/completions",
+    defaultModel: process.env.MISTRAL_MODEL || "mistral-small-latest",
+    thinkingModel: process.env.MISTRAL_THINKING_MODEL || "mistral-small-latest"
+  },
+  together: {
+    id: "together",
+    name: "Together AI",
+    apiKeyEnv: "TOGETHER_API_KEY",
+    apiKey: process.env.TOGETHER_API_KEY || "",
+    url: process.env.TOGETHER_URL || "https://api.together.xyz/v1/chat/completions",
+    defaultModel:
+      process.env.TOGETHER_MODEL || "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    thinkingModel:
+      process.env.TOGETHER_THINKING_MODEL || "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+  },
+  fireworks: {
+    id: "fireworks",
+    name: "Fireworks",
+    apiKeyEnv: "FIREWORKS_API_KEY",
+    apiKey: process.env.FIREWORKS_API_KEY || "",
+    url: process.env.FIREWORKS_URL || "https://api.fireworks.ai/inference/v1/chat/completions",
+    defaultModel:
+      process.env.FIREWORKS_MODEL || "accounts/fireworks/models/llama-v3p1-8b-instruct",
+    thinkingModel:
+      process.env.FIREWORKS_THINKING_MODEL || "accounts/fireworks/models/llama-v3p1-8b-instruct"
+  }
+};
+
+const PROVIDER_ORDER = [
+  "zhipu",
+  "deepseek",
+  "qwen",
+  "moonshot",
+  "minimax",
+  "openai",
+  "xai",
+  "openrouter",
+  "groq",
+  "mistral",
+  "together",
+  "fireworks"
+];
+const DEFAULT_PROVIDER = resolveDefaultProviderId();
 
 const sessions = new Map();
 
@@ -95,6 +226,56 @@ function sanitizeMessages(messages) {
     )
     .map((item) => ({ role: item.role, content: item.content.trim() }))
     .slice(-MAX_CONTEXT_MESSAGES);
+}
+
+function normalizeProviderId(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const providerId = value.trim().toLowerCase();
+  if (!PROVIDERS[providerId]) {
+    return "";
+  }
+
+  return providerId;
+}
+
+function resolveDefaultProviderId() {
+  const fromEnv = normalizeProviderId(process.env.DEFAULT_PROVIDER);
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  const firstConfigured = PROVIDER_ORDER.find((providerId) => PROVIDERS[providerId]?.apiKey);
+  return firstConfigured || "zhipu";
+}
+
+function normalizeModel(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 120) {
+    return "";
+  }
+
+  return trimmed;
+}
+
+function normalizeBoolean(value) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value === 1;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim().toLowerCase();
+    return trimmed === "1" || trimmed === "true" || trimmed === "yes" || trimmed === "on";
+  }
+  return false;
 }
 
 function normalizeSessionId(value) {
@@ -146,6 +327,10 @@ function extractReplyContent(content) {
   return extractTextContent(content, true);
 }
 
+function extractReasoningContent(content) {
+  return extractTextContent(content, true);
+}
+
 function extractStreamDeltaContent(payload) {
   const choice = payload?.choices?.[0];
   if (!choice) {
@@ -171,6 +356,50 @@ function extractStreamDeltaContent(payload) {
   }
 
   return "";
+}
+
+function extractStreamDeltaReasoning(payload) {
+  const choice = payload?.choices?.[0];
+  if (!choice) {
+    return "";
+  }
+
+  if (choice.delta && typeof choice.delta === "object") {
+    const reasoningContent = extractTextContent(choice.delta.reasoning_content, false);
+    if (reasoningContent) {
+      return reasoningContent;
+    }
+
+    const reasoning = extractTextContent(choice.delta.reasoning, false);
+    if (reasoning) {
+      return reasoning;
+    }
+
+    const reasoningDetails = extractTextContent(choice.delta.reasoning_details, false);
+    if (reasoningDetails) {
+      return reasoningDetails;
+    }
+  }
+
+  const messageReasoning =
+    extractTextContent(choice?.message?.reasoning_content, false) ||
+    extractTextContent(choice?.message?.reasoning, false) ||
+    extractTextContent(choice?.message?.reasoning_details, false);
+  if (messageReasoning) {
+    return messageReasoning;
+  }
+
+  return "";
+}
+
+function extractReplyAndReasoning(data) {
+  const message = data?.choices?.[0]?.message || {};
+  const reply = extractReplyContent(message.content);
+  const reasoning =
+    extractReasoningContent(message.reasoning_content) ||
+    extractReasoningContent(message.reasoning) ||
+    extractReasoningContent(message.reasoning_details);
+  return { reply, reasoning: reasoning || "" };
 }
 
 function pushConversation(session, userMessage, reply) {
@@ -203,9 +432,9 @@ async function extractUpstreamError(resp) {
   const text = await resp.text();
   try {
     const data = JSON.parse(text);
-    return data?.error?.message || data?.error || text || "Zhipu API request failed";
+    return data?.error?.message || data?.error || text || "Upstream request failed";
   } catch {
-    return text || "Zhipu API request failed";
+    return text || "Upstream request failed";
   }
 }
 
@@ -224,12 +453,85 @@ function upsertSession(sessionId, initialHistory) {
   return session;
 }
 
-async function handleChat(req, res) {
-  if (!ZHIPU_API_KEY) {
-    sendJson(res, 500, { error: "Server missing ZHIPU_API_KEY" });
-    return;
+function listProvidersForClient() {
+  return PROVIDER_ORDER.filter((providerId) => PROVIDERS[providerId]).map((providerId) => {
+    const provider = PROVIDERS[providerId];
+    return {
+      id: provider.id,
+      name: provider.name,
+      configured: Boolean(provider.apiKey),
+      defaultModel: provider.defaultModel,
+      thinkingModel: provider.thinkingModel
+    };
+  });
+}
+
+function resolveProviderOptions(body) {
+  const providerId = normalizeProviderId(body.provider) || DEFAULT_PROVIDER;
+  const provider = PROVIDERS[providerId];
+  if (!provider) {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: "provider is invalid"
+    };
   }
 
+  if (!provider.apiKey) {
+    return {
+      ok: false,
+      statusCode: 500,
+      error: `Server missing ${provider.apiKeyEnv} for ${provider.name}`
+    };
+  }
+
+  const enableThinking = normalizeBoolean(body.enableThinking);
+  const requestedModel = normalizeModel(body.model);
+  const model =
+    requestedModel || (enableThinking ? provider.thinkingModel : provider.defaultModel) || "";
+  if (!model) {
+    return {
+      ok: false,
+      statusCode: 500,
+      error: `No model configured for ${provider.name}`
+    };
+  }
+
+  return {
+    ok: true,
+    providerId,
+    provider,
+    model,
+    enableThinking
+  };
+}
+
+function buildUpstreamRequestBody({ providerId, messages, model, enableThinking, stream }) {
+  const payload = {
+    model,
+    messages
+  };
+
+  if (Number.isFinite(DEFAULT_TEMPERATURE)) {
+    payload.temperature = DEFAULT_TEMPERATURE;
+  }
+
+  if (stream) {
+    payload.stream = true;
+  }
+
+  if (providerId === "qwen" && enableThinking) {
+    payload.enable_thinking = true;
+  }
+
+  if (providerId === "minimax" && enableThinking) {
+    payload.reasoning_split = true;
+  }
+
+  return payload;
+}
+
+async function handleChat(req, res) {
   let body;
   try {
     body = await parseJsonBody(req);
@@ -244,6 +546,14 @@ async function handleChat(req, res) {
     return;
   }
 
+  const providerResult = resolveProviderOptions(body);
+  if (!providerResult.ok) {
+    sendJson(res, providerResult.statusCode, { error: providerResult.error });
+    return;
+  }
+
+  const { providerId, provider, model, enableThinking } = providerResult;
+
   cleanupExpiredSessions();
 
   let sessionId = normalizeSessionId(body.sessionId);
@@ -255,19 +565,22 @@ async function handleChat(req, res) {
   const session = upsertSession(sessionId, history);
   const contextMessages = session.messages.slice(-MAX_CONTEXT_MESSAGES);
   const messages = [...contextMessages, { role: "user", content: userMessage }];
+  const upstreamPayload = buildUpstreamRequestBody({
+    providerId,
+    messages,
+    model,
+    enableThinking,
+    stream: false
+  });
 
   try {
-    const aiResp = await fetch(ZHIPU_URL, {
+    const aiResp = await fetch(provider.url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${ZHIPU_API_KEY}`
+        Authorization: `Bearer ${provider.apiKey}`
       },
-      body: JSON.stringify({
-        model: ZHIPU_MODEL,
-        messages,
-        temperature: 0.7
-      })
+      body: JSON.stringify(upstreamPayload)
     });
 
     if (!aiResp.ok) {
@@ -277,7 +590,7 @@ async function handleChat(req, res) {
     }
 
     const data = await aiResp.json();
-    const reply = extractReplyContent(data?.choices?.[0]?.message?.content);
+    const { reply, reasoning } = extractReplyAndReasoning(data);
     if (!reply) {
       sendJson(res, 502, { error: "Empty response from model" });
       return;
@@ -285,18 +598,19 @@ async function handleChat(req, res) {
 
     pushConversation(session, userMessage, reply);
 
-    sendJson(res, 200, { reply, sessionId });
+    sendJson(res, 200, {
+      reply,
+      reasoning: reasoning || undefined,
+      sessionId,
+      provider: providerId,
+      model
+    });
   } catch (err) {
     sendJson(res, 500, { error: err.message || "Server error" });
   }
 }
 
 async function handleChatStream(req, res) {
-  if (!ZHIPU_API_KEY) {
-    sendJson(res, 500, { error: "Server missing ZHIPU_API_KEY" });
-    return;
-  }
-
   let body;
   try {
     body = await parseJsonBody(req);
@@ -311,6 +625,14 @@ async function handleChatStream(req, res) {
     return;
   }
 
+  const providerResult = resolveProviderOptions(body);
+  if (!providerResult.ok) {
+    sendJson(res, providerResult.statusCode, { error: providerResult.error });
+    return;
+  }
+
+  const { providerId, provider, model, enableThinking } = providerResult;
+
   cleanupExpiredSessions();
 
   let sessionId = normalizeSessionId(body.sessionId);
@@ -322,6 +644,13 @@ async function handleChatStream(req, res) {
   const session = upsertSession(sessionId, history);
   const contextMessages = session.messages.slice(-MAX_CONTEXT_MESSAGES);
   const messages = [...contextMessages, { role: "user", content: userMessage }];
+  const upstreamPayload = buildUpstreamRequestBody({
+    providerId,
+    messages,
+    model,
+    enableThinking,
+    stream: true
+  });
 
   const controller = new AbortController();
   let clientClosed = false;
@@ -331,19 +660,14 @@ async function handleChatStream(req, res) {
   });
 
   try {
-    const aiResp = await fetch(ZHIPU_URL, {
+    const aiResp = await fetch(provider.url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${ZHIPU_API_KEY}`
+        Authorization: `Bearer ${provider.apiKey}`
       },
       signal: controller.signal,
-      body: JSON.stringify({
-        model: ZHIPU_MODEL,
-        messages,
-        temperature: 0.7,
-        stream: true
-      })
+      body: JSON.stringify(upstreamPayload)
     });
 
     if (!aiResp.ok) {
@@ -362,13 +686,13 @@ async function handleChatStream(req, res) {
       res.flushHeaders();
     }
 
-    writeSseEvent(res, { type: "session", sessionId });
+    writeSseEvent(res, { type: "session", sessionId, provider: providerId, model });
 
     // Fallback for non-SSE providers: emit a single delta and done.
     const upstreamType = (aiResp.headers.get("content-type") || "").toLowerCase();
     if (!upstreamType.includes("text/event-stream")) {
       const data = await aiResp.json();
-      const reply = extractReplyContent(data?.choices?.[0]?.message?.content);
+      const { reply, reasoning } = extractReplyAndReasoning(data);
       if (!reply) {
         writeSseEvent(res, { type: "error", error: "Empty response from model" });
         res.end();
@@ -376,8 +700,11 @@ async function handleChatStream(req, res) {
       }
 
       pushConversation(session, userMessage, reply);
+      if (reasoning) {
+        writeSseEvent(res, { type: "reasoning", delta: reasoning });
+      }
       writeSseEvent(res, { type: "delta", delta: reply });
-      writeSseEvent(res, { type: "done", reply, sessionId });
+      writeSseEvent(res, { type: "done", reply, reasoning, sessionId, provider: providerId, model });
       res.end();
       return;
     }
@@ -391,6 +718,7 @@ async function handleChatStream(req, res) {
     const decoder = new TextDecoder();
     let buffer = "";
     let reply = "";
+    let reasoning = "";
 
     for await (const chunk of aiResp.body) {
       if (clientClosed) {
@@ -424,6 +752,12 @@ async function handleChatStream(req, res) {
           continue;
         }
 
+        const reasoningDelta = extractStreamDeltaReasoning(payload);
+        if (reasoningDelta) {
+          reasoning += reasoningDelta;
+          writeSseEvent(res, { type: "reasoning", delta: reasoningDelta });
+        }
+
         const delta = extractStreamDeltaContent(payload);
         if (delta) {
           reply += delta;
@@ -440,6 +774,11 @@ async function handleChatStream(req, res) {
     if (tailDataText && tailDataText !== "[DONE]") {
       try {
         const payload = JSON.parse(tailDataText);
+        const reasoningDelta = extractStreamDeltaReasoning(payload);
+        if (reasoningDelta) {
+          reasoning += reasoningDelta;
+          writeSseEvent(res, { type: "reasoning", delta: reasoningDelta });
+        }
         const delta = extractStreamDeltaContent(payload);
         if (delta) {
           reply += delta;
@@ -458,7 +797,14 @@ async function handleChatStream(req, res) {
     }
 
     pushConversation(session, userMessage, finalReply);
-    writeSseEvent(res, { type: "done", reply: finalReply, sessionId });
+    writeSseEvent(res, {
+      type: "done",
+      reply: finalReply,
+      reasoning: reasoning.trim() || undefined,
+      sessionId,
+      provider: providerId,
+      model
+    });
     res.end();
   } catch (err) {
     if (clientClosed || err?.name === "AbortError") {
@@ -530,6 +876,14 @@ function serveStatic(req, res) {
 
 const server = http.createServer(async (req, res) => {
   const parsed = new URL(req.url, `http://${req.headers.host}`);
+
+  if (req.method === "GET" && parsed.pathname === "/api/providers") {
+    sendJson(res, 200, {
+      defaultProvider: DEFAULT_PROVIDER,
+      providers: listProvidersForClient()
+    });
+    return;
+  }
 
   if (req.method === "POST" && parsed.pathname === "/api/chat/stream") {
     await handleChatStream(req, res);

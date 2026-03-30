@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>简单 AI 助手</title>
+    <title>多模型 AI 助手</title>
     <style>
       :root {
         --bg: #f6f7fb;
@@ -26,7 +26,7 @@
       }
 
       .app {
-        width: min(860px, 92vw);
+        width: min(960px, 94vw);
         margin: 24px auto;
         background: var(--panel);
         border: 1px solid var(--border);
@@ -58,14 +58,57 @@
         cursor: pointer;
       }
 
+      .settings {
+        display: grid;
+        grid-template-columns: 180px 1fr auto;
+        gap: 10px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+        background: #fafbff;
+      }
+
+      .settings label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .settings select,
+      .settings input[type="text"] {
+        height: 34px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0 10px;
+        font-size: 13px;
+        color: var(--text);
+        background: #fff;
+      }
+
+      .switch {
+        justify-content: center;
+        align-items: flex-start;
+      }
+
+      .switch-inner {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 20px;
+        user-select: none;
+        color: var(--text);
+        font-size: 13px;
+      }
+
       .messages {
-        height: 62vh;
+        height: 60vh;
         overflow-y: auto;
         padding: 16px;
       }
 
       .msg {
-        max-width: 88%;
+        max-width: 90%;
         padding: 10px 12px;
         border-radius: 10px;
         margin-bottom: 10px;
@@ -81,6 +124,13 @@
 
       .assistant {
         background: #f2f4f8;
+      }
+
+      .reasoning {
+        background: #fff7ed;
+        border: 1px dashed #fdba74;
+        color: #7c2d12;
+        font-size: 13px;
       }
 
       .error {
@@ -109,6 +159,22 @@
         line-height: 1.5;
       }
 
+      .preview-btn {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 0 14px;
+        min-width: 76px;
+        background: #fff;
+        color: var(--text);
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      .preview-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
       .send-btn {
         border: none;
         border-radius: 8px;
@@ -125,41 +191,158 @@
         cursor: not-allowed;
       }
 
+      .preview-panel {
+        margin: 0 12px 12px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: #fcfdff;
+      }
+
+      .preview-title {
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .preview-content {
+        min-height: 56px;
+        max-height: 220px;
+        overflow-y: auto;
+        padding: 10px 12px;
+        color: var(--text);
+        font-size: 14px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .preview-empty {
+        color: var(--muted);
+      }
+
       .tip {
         color: var(--muted);
         font-size: 12px;
         padding: 0 14px 12px;
+      }
+
+      @media (max-width: 760px) {
+        .settings {
+          grid-template-columns: 1fr;
+        }
+
+        .switch {
+          align-items: flex-start;
+        }
+
+        .switch-inner {
+          margin-top: 0;
+        }
       }
     </style>
   </head>
   <body>
     <div class="app">
       <div class="toolbar">
-        <h1 class="title">简单 AI 助手</h1>
+        <h1 class="title">多模型 AI 助手</h1>
         <button id="resetBtn" type="button">新对话</button>
       </div>
+
+      <div class="settings">
+        <label>
+          API 提供商
+          <select id="providerSelect"></select>
+        </label>
+
+        <label>
+          模型
+          <input id="modelInput" type="text" maxlength="120" placeholder="例如：deepseek-chat / glm-4-flash" />
+        </label>
+
+        <label class="switch">
+          <span class="switch-inner">
+            <input id="thinkingToggle" type="checkbox" />
+            思考模式
+          </span>
+        </label>
+      </div>
+
       <div id="messages" class="messages"></div>
+
       <form id="chatForm" class="input-bar">
         <textarea id="input" placeholder="输入你的问题，按 Enter 发送，Shift + Enter 换行"></textarea>
+        <button id="previewBtn" class="preview-btn" type="button">预览</button>
         <button id="sendBtn" class="send-btn" type="submit">发送</button>
       </form>
+      <div id="previewPanel" class="preview-panel" hidden>
+        <div class="preview-title">发送预览</div>
+        <div id="previewContent" class="preview-content preview-empty">预览区为空，先输入内容。</div>
+      </div>
+
       <div id="tip" class="tip"></div>
     </div>
 
     <script>
-      const STORAGE_KEY = "simple_ai_chat_state_v1";
+      const STORAGE_KEY = "simple_ai_chat_state_v2";
+      const LEGACY_STORAGE_KEY = "simple_ai_chat_state_v1";
       const SESSION_ID_RE = /^[a-zA-Z0-9_-]{8,128}$/;
       const MAX_LOCAL_HISTORY = 20;
+      const MAX_MODEL_LENGTH = 120;
+
+      const FALLBACK_PROVIDER_DATA = {
+        defaultProvider: "zhipu",
+        providers: [
+          {
+            id: "zhipu",
+            name: "Zhipu AI",
+            configured: true,
+            defaultModel: "glm-4-flash",
+            thinkingModel: "glm-z1-flash"
+          },
+          {
+            id: "deepseek",
+            name: "DeepSeek",
+            configured: true,
+            defaultModel: "deepseek-chat",
+            thinkingModel: "deepseek-reasoner"
+          },
+          {
+            id: "qwen",
+            name: "Qwen (DashScope Compatible)",
+            configured: true,
+            defaultModel: "qwen-plus",
+            thinkingModel: "qwen-plus"
+          },
+          {
+            id: "moonshot",
+            name: "Moonshot (Kimi)",
+            configured: true,
+            defaultModel: "moonshot-v1-8k",
+            thinkingModel: "moonshot-v1-8k"
+          }
+        ]
+      };
 
       const messagesEl = document.getElementById("messages");
       const formEl = document.getElementById("chatForm");
       const inputEl = document.getElementById("input");
       const sendBtn = document.getElementById("sendBtn");
+      const previewBtnEl = document.getElementById("previewBtn");
+      const previewPanelEl = document.getElementById("previewPanel");
+      const previewContentEl = document.getElementById("previewContent");
       const tipEl = document.getElementById("tip");
       const resetBtn = document.getElementById("resetBtn");
+      const providerSelectEl = document.getElementById("providerSelect");
+      const modelInputEl = document.getElementById("modelInput");
+      const thinkingToggleEl = document.getElementById("thinkingToggle");
 
       const history = [];
       let sessionId = "";
+      let providerCatalog = [];
+      let defaultProviderId = "zhipu";
+      let currentProviderId = "";
+      let previewEnabled = false;
 
       function createSessionId() {
         if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -193,6 +376,44 @@
           .slice(-MAX_LOCAL_HISTORY);
       }
 
+      function sanitizeModel(value) {
+        if (typeof value !== "string") {
+          return "";
+        }
+        const trimmed = value.trim();
+        if (!trimmed || trimmed.length > MAX_MODEL_LENGTH) {
+          return "";
+        }
+        return trimmed;
+      }
+
+      function sanitizeProviderId(value, providers = providerCatalog) {
+        if (typeof value !== "string") {
+          return "";
+        }
+
+        const providerId = value.trim().toLowerCase();
+        const exists = providers.some((item) => item.id === providerId);
+        return exists ? providerId : "";
+      }
+
+      function getProviderById(providerId) {
+        return providerCatalog.find((item) => item.id === providerId) || null;
+      }
+
+      function getRecommendedModel(providerId, enableThinking) {
+        const provider = getProviderById(providerId);
+        if (!provider) {
+          return "";
+        }
+
+        if (enableThinking && provider.thinkingModel) {
+          return provider.thinkingModel;
+        }
+
+        return provider.defaultModel || provider.thinkingModel || "";
+      }
+
       function appendMessage(role, content) {
         const node = document.createElement("div");
         node.className = `msg ${role}`;
@@ -202,9 +423,95 @@
         return node;
       }
 
+      function updatePreviewPanel() {
+        const text = inputEl.value.trim();
+        if (!text) {
+          previewContentEl.textContent = "预览区为空，先输入内容。";
+          previewContentEl.classList.add("preview-empty");
+          return;
+        }
+
+        previewContentEl.textContent = text;
+        previewContentEl.classList.remove("preview-empty");
+      }
+
+      function setPreviewEnabled(nextEnabled) {
+        previewEnabled = Boolean(nextEnabled);
+        previewPanelEl.hidden = !previewEnabled;
+        previewBtnEl.textContent = previewEnabled ? "关闭预览" : "预览";
+        if (previewEnabled) {
+          updatePreviewPanel();
+        }
+      }
+
       function updateMessage(node, content) {
         node.textContent = content;
         messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      const requestUiFrame =
+        typeof window.requestAnimationFrame === "function"
+          ? (cb) => window.requestAnimationFrame(cb)
+          : (cb) => window.setTimeout(cb, 16);
+
+      const cancelUiFrame =
+        typeof window.cancelAnimationFrame === "function"
+          ? (id) => window.cancelAnimationFrame(id)
+          : (id) => window.clearTimeout(id);
+
+      function createBufferedRenderer(node, formatFn = (text) => text) {
+        let baseText = "";
+        let pendingText = "";
+        let frameId = 0;
+
+        const flush = () => {
+          frameId = 0;
+          if (!pendingText) {
+            return;
+          }
+
+          baseText += pendingText;
+          pendingText = "";
+          updateMessage(node, formatFn(baseText));
+        };
+
+        return {
+          push(delta) {
+            if (!delta) {
+              return;
+            }
+
+            pendingText += delta;
+            if (!frameId) {
+              frameId = requestUiFrame(flush);
+            }
+          },
+          setText(nextText) {
+            if (frameId) {
+              cancelUiFrame(frameId);
+              frameId = 0;
+            }
+
+            baseText = nextText || "";
+            pendingText = "";
+            updateMessage(node, formatFn(baseText));
+          },
+          flushNow() {
+            if (frameId) {
+              cancelUiFrame(frameId);
+              frameId = 0;
+            }
+
+            if (pendingText) {
+              baseText += pendingText;
+              pendingText = "";
+            }
+            updateMessage(node, formatFn(baseText));
+          },
+          getText() {
+            return baseText + pendingText;
+          }
+        };
       }
 
       function parseSsePayload(block) {
@@ -276,9 +583,28 @@
         }
       }
 
+      function getCurrentProviderId() {
+        const selected = sanitizeProviderId(providerSelectEl.value);
+        if (selected) {
+          return selected;
+        }
+        if (currentProviderId) {
+          return currentProviderId;
+        }
+        if (defaultProviderId) {
+          return defaultProviderId;
+        }
+        return providerCatalog[0]?.id || "zhipu";
+      }
+
       function updateTip() {
         const shortId = sessionId ? sessionId.slice(0, 8) : "-";
-        tipEl.textContent = `当前会话：${shortId} · 已缓存 ${history.length} 条消息`;
+        const providerId = getCurrentProviderId();
+        const provider = getProviderById(providerId);
+        const providerName = provider ? provider.name : providerId;
+        const model = sanitizeModel(modelInputEl.value) || "-";
+        const thinkingText = thinkingToggleEl.checked ? "思考开启" : "思考关闭";
+        tipEl.textContent = `当前会话：${shortId} · ${providerName} · ${model} · ${thinkingText} · 已缓存 ${history.length} 条消息`;
       }
 
       function saveState() {
@@ -286,28 +612,63 @@
           STORAGE_KEY,
           JSON.stringify({
             sessionId,
-            history
+            history,
+            settings: {
+              providerId: getCurrentProviderId(),
+              model: sanitizeModel(modelInputEl.value),
+              enableThinking: Boolean(thinkingToggleEl.checked),
+              previewEnabled: Boolean(previewEnabled)
+            }
           })
         );
         updateTip();
       }
 
+      function parseStoredState(raw) {
+        if (!raw) {
+          return null;
+        }
+
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      }
+
       function loadState() {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          try {
-            const data = JSON.parse(raw);
-            const restored = sanitizeHistory(data.history);
-            history.push(...restored);
-            sessionId = sanitizeSessionId(data.sessionId);
-          } catch {
-            localStorage.removeItem(STORAGE_KEY);
+        const state = {
+          providerId: "",
+          model: "",
+          enableThinking: false,
+          previewEnabled: false
+        };
+
+        const parsed = parseStoredState(localStorage.getItem(STORAGE_KEY));
+        const legacy = parsed ? null : parseStoredState(localStorage.getItem(LEGACY_STORAGE_KEY));
+        const data = parsed || legacy;
+
+        if (data) {
+          const restored = sanitizeHistory(data.history);
+          history.push(...restored);
+          sessionId = sanitizeSessionId(data.sessionId);
+
+          const settings = data.settings || {};
+          if (typeof settings.providerId === "string") {
+            state.providerId = settings.providerId;
           }
+          if (typeof settings.model === "string") {
+            state.model = sanitizeModel(settings.model);
+          }
+          state.enableThinking = Boolean(settings.enableThinking);
+          state.previewEnabled = Boolean(settings.previewEnabled);
         }
 
         if (!sessionId) {
           sessionId = createSessionId();
         }
+
+        return state;
       }
 
       function renderHistory() {
@@ -317,7 +678,95 @@
         }
 
         if (history.length === 0) {
-          appendMessage("assistant", "你好，我是你的 AI 助手。你可以连续追问，我会记住上下文。");
+          appendMessage("assistant", "你好，我是你的 AI 助手。你可以切换 API 提供商、模型和思考模式。");
+        }
+      }
+
+      function normalizeProviderPayload(data) {
+        const providers = Array.isArray(data?.providers)
+          ? data.providers
+              .filter((item) => item && typeof item.id === "string")
+              .map((item) => ({
+                id: item.id.trim().toLowerCase(),
+                name:
+                  typeof item.name === "string" && item.name.trim()
+                    ? item.name.trim()
+                    : item.id.trim(),
+                configured: Boolean(item.configured),
+                defaultModel: sanitizeModel(item.defaultModel),
+                thinkingModel: sanitizeModel(item.thinkingModel)
+              }))
+              .filter((item) => item.id)
+          : [];
+
+        return {
+          providers,
+          defaultProvider:
+            typeof data?.defaultProvider === "string" ? data.defaultProvider.trim().toLowerCase() : ""
+        };
+      }
+
+      function fillProviderSelect() {
+        providerSelectEl.innerHTML = "";
+        for (const provider of providerCatalog) {
+          const option = document.createElement("option");
+          option.value = provider.id;
+          option.textContent = provider.configured ? provider.name : `${provider.name} (未配置)`;
+          providerSelectEl.appendChild(option);
+        }
+      }
+
+      async function loadProviders() {
+        let payload = FALLBACK_PROVIDER_DATA;
+
+        try {
+          const resp = await fetch("/api/providers");
+          if (!resp.ok) {
+            throw new Error("获取提供商列表失败");
+          }
+          payload = await resp.json();
+        } catch {
+          // fallback to built-in provider definitions
+        }
+
+        const normalized = normalizeProviderPayload(payload);
+        if (normalized.providers.length === 0) {
+          const fallback = normalizeProviderPayload(FALLBACK_PROVIDER_DATA);
+          providerCatalog = fallback.providers;
+          defaultProviderId = fallback.defaultProvider || fallback.providers[0]?.id || "zhipu";
+        } else {
+          providerCatalog = normalized.providers;
+          defaultProviderId =
+            sanitizeProviderId(normalized.defaultProvider, providerCatalog) ||
+            providerCatalog[0]?.id ||
+            "zhipu";
+        }
+
+        fillProviderSelect();
+      }
+
+      function applySettings(initialSettings) {
+        const providerId =
+          sanitizeProviderId(initialSettings.providerId, providerCatalog) ||
+          defaultProviderId ||
+          providerCatalog[0]?.id ||
+          "zhipu";
+
+        currentProviderId = providerId;
+        providerSelectEl.value = providerId;
+
+        thinkingToggleEl.checked = Boolean(initialSettings.enableThinking);
+
+        const recommendedModel = getRecommendedModel(providerId, thinkingToggleEl.checked);
+        const storedModel = sanitizeModel(initialSettings.model);
+        modelInputEl.value = storedModel || recommendedModel;
+        setPreviewEnabled(Boolean(initialSettings.previewEnabled));
+      }
+
+      function syncModelWhenPresetChanged(previousRecommended, nextRecommended) {
+        const currentModel = sanitizeModel(modelInputEl.value);
+        if (!currentModel || currentModel === previousRecommended) {
+          modelInputEl.value = nextRecommended;
         }
       }
 
@@ -352,16 +801,41 @@
           return;
         }
 
+        const providerId = getCurrentProviderId();
+        const recommendedModel = getRecommendedModel(providerId, thinkingToggleEl.checked);
+        const model = sanitizeModel(modelInputEl.value) || recommendedModel;
+        if (!model) {
+          appendMessage("assistant error", "错误：当前模型为空，请先填写模型名称");
+          return;
+        }
+
+        modelInputEl.value = model;
+
         appendMessage("user", message);
         history.push({ role: "user", content: message });
         history.splice(0, Math.max(0, history.length - MAX_LOCAL_HISTORY));
+
         inputEl.value = "";
+        updatePreviewPanel();
         sendBtn.disabled = true;
+        previewBtnEl.disabled = true;
         resetBtn.disabled = true;
+        providerSelectEl.disabled = true;
+        modelInputEl.disabled = true;
+        thinkingToggleEl.disabled = true;
         saveState();
 
+        const reasoningNode = appendMessage("assistant reasoning", "");
+        reasoningNode.style.display = "none";
+
         const assistantNode = appendMessage("assistant", "");
+        const assistantRenderer = createBufferedRenderer(assistantNode);
+        const reasoningRenderer = createBufferedRenderer(
+          reasoningNode,
+          (text) => `思考过程：\n${text}`
+        );
         let assistantReply = "";
+        let reasoningText = "";
         let streamDone = false;
         let streamError = "";
 
@@ -372,7 +846,10 @@
             body: JSON.stringify({
               message,
               sessionId,
-              history
+              history,
+              provider: providerId,
+              model,
+              enableThinking: thinkingToggleEl.checked
             })
           });
 
@@ -381,18 +858,45 @@
           }
 
           await readSseStream(resp, (payload) => {
-            if (payload.type === "session" && typeof payload.sessionId === "string") {
-              const nextSessionId = sanitizeSessionId(payload.sessionId);
-              if (nextSessionId) {
-                sessionId = nextSessionId;
-                updateTip();
+            if (payload.type === "session") {
+              if (typeof payload.sessionId === "string") {
+                const nextSessionId = sanitizeSessionId(payload.sessionId);
+                if (nextSessionId) {
+                  sessionId = nextSessionId;
+                }
+              }
+
+              if (typeof payload.provider === "string") {
+                const nextProvider = sanitizeProviderId(payload.provider, providerCatalog);
+                if (nextProvider) {
+                  currentProviderId = nextProvider;
+                  providerSelectEl.value = nextProvider;
+                }
+              }
+
+              if (typeof payload.model === "string") {
+                const nextModel = sanitizeModel(payload.model);
+                if (nextModel) {
+                  modelInputEl.value = nextModel;
+                }
+              }
+
+              updateTip();
+              return;
+            }
+
+            if (payload.type === "reasoning" && typeof payload.delta === "string") {
+              reasoningText += payload.delta;
+              if (reasoningText.trim()) {
+                reasoningNode.style.display = "";
+                reasoningRenderer.push(payload.delta);
               }
               return;
             }
 
             if (payload.type === "delta" && typeof payload.delta === "string") {
               assistantReply += payload.delta;
-              updateMessage(assistantNode, assistantReply);
+              assistantRenderer.push(payload.delta);
               return;
             }
 
@@ -404,15 +908,38 @@
             if (payload.type === "done") {
               if (typeof payload.reply === "string" && payload.reply) {
                 assistantReply = payload.reply;
-                updateMessage(assistantNode, assistantReply);
+                assistantRenderer.setText(assistantReply);
               }
+
+              if (typeof payload.reasoning === "string" && payload.reasoning.trim()) {
+                reasoningText = payload.reasoning;
+                reasoningRenderer.setText(reasoningText);
+              }
+
               if (typeof payload.sessionId === "string") {
                 const nextSessionId = sanitizeSessionId(payload.sessionId);
                 if (nextSessionId) {
                   sessionId = nextSessionId;
                 }
               }
+
+              if (typeof payload.provider === "string") {
+                const nextProvider = sanitizeProviderId(payload.provider, providerCatalog);
+                if (nextProvider) {
+                  currentProviderId = nextProvider;
+                  providerSelectEl.value = nextProvider;
+                }
+              }
+
+              if (typeof payload.model === "string") {
+                const nextModel = sanitizeModel(payload.model);
+                if (nextModel) {
+                  modelInputEl.value = nextModel;
+                }
+              }
+
               streamDone = true;
+              updateTip();
             }
           });
 
@@ -423,18 +950,54 @@
             throw new Error("流式响应中断");
           }
 
+          if (!assistantReply) {
+            assistantRenderer.flushNow();
+            assistantReply = assistantRenderer.getText();
+          }
+
+          if (!reasoningText) {
+            reasoningRenderer.flushNow();
+            reasoningText = reasoningRenderer.getText();
+          }
+
           const finalReply = assistantReply.trim();
           if (!finalReply) {
             throw new Error("模型返回空内容");
           }
 
-          updateMessage(assistantNode, finalReply);
+          assistantRenderer.setText(finalReply);
+
+          if (reasoningText.trim()) {
+            reasoningNode.style.display = "";
+            reasoningRenderer.setText(reasoningText.trim());
+          } else {
+            reasoningNode.remove();
+          }
+
           history.push({ role: "assistant", content: finalReply });
           history.splice(0, Math.max(0, history.length - MAX_LOCAL_HISTORY));
           saveState();
         } catch (err) {
           history.pop();
           saveState();
+
+          if (!assistantReply) {
+            assistantRenderer.flushNow();
+            assistantReply = assistantRenderer.getText();
+          }
+
+          if (!reasoningText) {
+            reasoningRenderer.flushNow();
+            reasoningText = reasoningRenderer.getText();
+          }
+
+          if (!reasoningText.trim()) {
+            reasoningNode.remove();
+          } else {
+            reasoningNode.style.display = "";
+            updateMessage(reasoningNode, `思考过程（中断）：\n${reasoningText.trim()}`);
+          }
+
           assistantNode.className = "msg assistant error";
           if (assistantReply) {
             updateMessage(assistantNode, `${assistantReply}\n\n[流式中断] ${err.message}`);
@@ -443,10 +1006,44 @@
           }
         } finally {
           sendBtn.disabled = false;
+          previewBtnEl.disabled = false;
           resetBtn.disabled = false;
+          providerSelectEl.disabled = false;
+          modelInputEl.disabled = false;
+          thinkingToggleEl.disabled = false;
           inputEl.focus();
         }
       }
+
+      providerSelectEl.addEventListener("change", () => {
+        const previousProviderId = currentProviderId || getCurrentProviderId();
+        const previousRecommended = getRecommendedModel(previousProviderId, thinkingToggleEl.checked);
+
+        currentProviderId = sanitizeProviderId(providerSelectEl.value) || defaultProviderId;
+        providerSelectEl.value = currentProviderId;
+
+        const nextRecommended = getRecommendedModel(currentProviderId, thinkingToggleEl.checked);
+        syncModelWhenPresetChanged(previousRecommended, nextRecommended);
+        saveState();
+      });
+
+      thinkingToggleEl.addEventListener("change", () => {
+        const providerId = getCurrentProviderId();
+        const previousRecommended = getRecommendedModel(providerId, !thinkingToggleEl.checked);
+        const nextRecommended = getRecommendedModel(providerId, thinkingToggleEl.checked);
+        syncModelWhenPresetChanged(previousRecommended, nextRecommended);
+        saveState();
+      });
+
+      modelInputEl.addEventListener("blur", () => {
+        modelInputEl.value = sanitizeModel(modelInputEl.value);
+        saveState();
+      });
+
+      previewBtnEl.addEventListener("click", () => {
+        setPreviewEnabled(!previewEnabled);
+        saveState();
+      });
 
       formEl.addEventListener("submit", async (e) => {
         e.preventDefault();
@@ -460,14 +1057,26 @@
         }
       });
 
+      inputEl.addEventListener("input", () => {
+        if (previewEnabled) {
+          updatePreviewPanel();
+        }
+      });
+
       resetBtn.addEventListener("click", async () => {
         await resetConversation(true);
       });
 
-      loadState();
-      renderHistory();
-      updateTip();
-      inputEl.focus();
+      async function init() {
+        const initialSettings = loadState();
+        await loadProviders();
+        applySettings(initialSettings);
+        renderHistory();
+        updateTip();
+        inputEl.focus();
+      }
+
+      init();
     </script>
   </body>
 </html>
