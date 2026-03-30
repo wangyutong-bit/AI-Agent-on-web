@@ -1,0 +1,473 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>简单 AI 助手</title>
+    <style>
+      :root {
+        --bg: #f6f7fb;
+        --panel: #ffffff;
+        --border: #dde1ea;
+        --text: #111827;
+        --muted: #6b7280;
+        --primary: #0f172a;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .app {
+        width: min(860px, 92vw);
+        margin: 24px auto;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border);
+        background: #fff;
+      }
+
+      .title {
+        margin: 0;
+        font-size: 15px;
+      }
+
+      .toolbar button {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 12px;
+        background: #fff;
+        color: var(--text);
+        cursor: pointer;
+      }
+
+      .messages {
+        height: 62vh;
+        overflow-y: auto;
+        padding: 16px;
+      }
+
+      .msg {
+        max-width: 88%;
+        padding: 10px 12px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .user {
+        margin-left: auto;
+        background: #e9eefc;
+      }
+
+      .assistant {
+        background: #f2f4f8;
+      }
+
+      .error {
+        background: #fef2f2;
+        color: #991b1b;
+      }
+
+      .input-bar {
+        border-top: 1px solid var(--border);
+        padding: 12px;
+        display: flex;
+        gap: 8px;
+        background: #fff;
+      }
+
+      textarea {
+        flex: 1;
+        min-height: 44px;
+        max-height: 180px;
+        resize: vertical;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px 12px;
+        outline: none;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .send-btn {
+        border: none;
+        border-radius: 8px;
+        padding: 0 16px;
+        min-width: 76px;
+        background: var(--primary);
+        color: #fff;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      .send-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      .tip {
+        color: var(--muted);
+        font-size: 12px;
+        padding: 0 14px 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="toolbar">
+        <h1 class="title">简单 AI 助手</h1>
+        <button id="resetBtn" type="button">新对话</button>
+      </div>
+      <div id="messages" class="messages"></div>
+      <form id="chatForm" class="input-bar">
+        <textarea id="input" placeholder="输入你的问题，按 Enter 发送，Shift + Enter 换行"></textarea>
+        <button id="sendBtn" class="send-btn" type="submit">发送</button>
+      </form>
+      <div id="tip" class="tip"></div>
+    </div>
+
+    <script>
+      const STORAGE_KEY = "simple_ai_chat_state_v1";
+      const SESSION_ID_RE = /^[a-zA-Z0-9_-]{8,128}$/;
+      const MAX_LOCAL_HISTORY = 20;
+
+      const messagesEl = document.getElementById("messages");
+      const formEl = document.getElementById("chatForm");
+      const inputEl = document.getElementById("input");
+      const sendBtn = document.getElementById("sendBtn");
+      const tipEl = document.getElementById("tip");
+      const resetBtn = document.getElementById("resetBtn");
+
+      const history = [];
+      let sessionId = "";
+
+      function createSessionId() {
+        if (window.crypto && typeof window.crypto.randomUUID === "function") {
+          return window.crypto.randomUUID();
+        }
+        return `sid_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+      }
+
+      function sanitizeSessionId(value) {
+        if (typeof value !== "string") {
+          return "";
+        }
+        const trimmed = value.trim();
+        return SESSION_ID_RE.test(trimmed) ? trimmed : "";
+      }
+
+      function sanitizeHistory(raw) {
+        if (!Array.isArray(raw)) {
+          return [];
+        }
+
+        return raw
+          .filter(
+            (item) =>
+              item &&
+              (item.role === "user" || item.role === "assistant") &&
+              typeof item.content === "string" &&
+              item.content.trim()
+          )
+          .map((item) => ({ role: item.role, content: item.content.trim() }))
+          .slice(-MAX_LOCAL_HISTORY);
+      }
+
+      function appendMessage(role, content) {
+        const node = document.createElement("div");
+        node.className = `msg ${role}`;
+        node.textContent = content;
+        messagesEl.appendChild(node);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return node;
+      }
+
+      function updateMessage(node, content) {
+        node.textContent = content;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function parseSsePayload(block) {
+        const dataLines = block
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart());
+
+        if (dataLines.length === 0) {
+          return null;
+        }
+
+        const dataText = dataLines.join("\n");
+        try {
+          return JSON.parse(dataText);
+        } catch {
+          return null;
+        }
+      }
+
+      async function readSseStream(resp, onPayload) {
+        if (!resp.body) {
+          throw new Error("浏览器不支持流式响应");
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          buffer = buffer.replace(/\r\n/g, "\n");
+
+          let boundary = buffer.indexOf("\n\n");
+          while (boundary !== -1) {
+            const block = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            const payload = parseSsePayload(block);
+            if (payload) {
+              onPayload(payload);
+            }
+            boundary = buffer.indexOf("\n\n");
+          }
+        }
+
+        buffer += decoder.decode();
+        const lastPayload = parseSsePayload(buffer);
+        if (lastPayload) {
+          onPayload(lastPayload);
+        }
+      }
+
+      async function readErrorMessage(resp) {
+        const contentType = (resp.headers.get("content-type") || "").toLowerCase();
+        try {
+          if (contentType.includes("application/json")) {
+            const data = await resp.json();
+            return data.error || "请求失败";
+          }
+          const text = await resp.text();
+          return text || "请求失败";
+        } catch {
+          return "请求失败";
+        }
+      }
+
+      function updateTip() {
+        const shortId = sessionId ? sessionId.slice(0, 8) : "-";
+        tipEl.textContent = `当前会话：${shortId} · 已缓存 ${history.length} 条消息`;
+      }
+
+      function saveState() {
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            sessionId,
+            history
+          })
+        );
+        updateTip();
+      }
+
+      function loadState() {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          try {
+            const data = JSON.parse(raw);
+            const restored = sanitizeHistory(data.history);
+            history.push(...restored);
+            sessionId = sanitizeSessionId(data.sessionId);
+          } catch {
+            localStorage.removeItem(STORAGE_KEY);
+          }
+        }
+
+        if (!sessionId) {
+          sessionId = createSessionId();
+        }
+      }
+
+      function renderHistory() {
+        messagesEl.innerHTML = "";
+        for (const item of history) {
+          appendMessage(item.role, item.content);
+        }
+
+        if (history.length === 0) {
+          appendMessage("assistant", "你好，我是你的 AI 助手。你可以连续追问，我会记住上下文。");
+        }
+      }
+
+      async function resetConversation(showNotice = true) {
+        const oldSessionId = sessionId;
+        history.length = 0;
+        sessionId = createSessionId();
+        renderHistory();
+        if (showNotice) {
+          appendMessage("assistant", "已开启新对话。现在的提问不会带上旧上下文。");
+        }
+        saveState();
+
+        if (!oldSessionId) {
+          return;
+        }
+
+        try {
+          await fetch("/api/chat/reset", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionId: oldSessionId })
+          });
+        } catch {
+          // Ignore reset errors; local reset has already happened.
+        }
+      }
+
+      async function sendMessage() {
+        const message = inputEl.value.trim();
+        if (!message || sendBtn.disabled) {
+          return;
+        }
+
+        appendMessage("user", message);
+        history.push({ role: "user", content: message });
+        history.splice(0, Math.max(0, history.length - MAX_LOCAL_HISTORY));
+        inputEl.value = "";
+        sendBtn.disabled = true;
+        resetBtn.disabled = true;
+        saveState();
+
+        const assistantNode = appendMessage("assistant", "");
+        let assistantReply = "";
+        let streamDone = false;
+        let streamError = "";
+
+        try {
+          const resp = await fetch("/api/chat/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message,
+              sessionId,
+              history
+            })
+          });
+
+          if (!resp.ok) {
+            throw new Error(await readErrorMessage(resp));
+          }
+
+          await readSseStream(resp, (payload) => {
+            if (payload.type === "session" && typeof payload.sessionId === "string") {
+              const nextSessionId = sanitizeSessionId(payload.sessionId);
+              if (nextSessionId) {
+                sessionId = nextSessionId;
+                updateTip();
+              }
+              return;
+            }
+
+            if (payload.type === "delta" && typeof payload.delta === "string") {
+              assistantReply += payload.delta;
+              updateMessage(assistantNode, assistantReply);
+              return;
+            }
+
+            if (payload.type === "error" && typeof payload.error === "string") {
+              streamError = payload.error;
+              return;
+            }
+
+            if (payload.type === "done") {
+              if (typeof payload.reply === "string" && payload.reply) {
+                assistantReply = payload.reply;
+                updateMessage(assistantNode, assistantReply);
+              }
+              if (typeof payload.sessionId === "string") {
+                const nextSessionId = sanitizeSessionId(payload.sessionId);
+                if (nextSessionId) {
+                  sessionId = nextSessionId;
+                }
+              }
+              streamDone = true;
+            }
+          });
+
+          if (streamError) {
+            throw new Error(streamError);
+          }
+          if (!streamDone) {
+            throw new Error("流式响应中断");
+          }
+
+          const finalReply = assistantReply.trim();
+          if (!finalReply) {
+            throw new Error("模型返回空内容");
+          }
+
+          updateMessage(assistantNode, finalReply);
+          history.push({ role: "assistant", content: finalReply });
+          history.splice(0, Math.max(0, history.length - MAX_LOCAL_HISTORY));
+          saveState();
+        } catch (err) {
+          history.pop();
+          saveState();
+          assistantNode.className = "msg assistant error";
+          if (assistantReply) {
+            updateMessage(assistantNode, `${assistantReply}\n\n[流式中断] ${err.message}`);
+          } else {
+            updateMessage(assistantNode, `错误：${err.message}`);
+          }
+        } finally {
+          sendBtn.disabled = false;
+          resetBtn.disabled = false;
+          inputEl.focus();
+        }
+      }
+
+      formEl.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        await sendMessage();
+      });
+
+      inputEl.addEventListener("keydown", async (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          await sendMessage();
+        }
+      });
+
+      resetBtn.addEventListener("click", async () => {
+        await resetConversation(true);
+      });
+
+      loadState();
+      renderHistory();
+      updateTip();
+      inputEl.focus();
+    </script>
+  </body>
+</html>
