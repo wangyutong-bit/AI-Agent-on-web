@@ -44,6 +44,14 @@
         background: #fff;
       }
 
+      .toolbar-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
       .title {
         margin: 0;
         font-size: 15px;
@@ -228,6 +236,15 @@
       }
 
       @media (max-width: 760px) {
+        .toolbar {
+          flex-wrap: wrap;
+        }
+
+        .toolbar-actions {
+          width: 100%;
+          justify-content: flex-start;
+        }
+
         .settings {
           grid-template-columns: 1fr;
         }
@@ -246,7 +263,11 @@
     <div class="app">
       <div class="toolbar">
         <h1 class="title">多模型 AI 助手</h1>
-        <button id="resetBtn" type="button">新对话</button>
+        <div class="toolbar-actions">
+          <button id="copyBtn" type="button">复制对话</button>
+          <button id="shareBtn" type="button">分享对话</button>
+          <button id="resetBtn" type="button">新对话</button>
+        </div>
       </div>
 
       <div class="settings">
@@ -332,6 +353,8 @@
       const previewPanelEl = document.getElementById("previewPanel");
       const previewContentEl = document.getElementById("previewContent");
       const tipEl = document.getElementById("tip");
+      const copyBtn = document.getElementById("copyBtn");
+      const shareBtn = document.getElementById("shareBtn");
       const resetBtn = document.getElementById("resetBtn");
       const providerSelectEl = document.getElementById("providerSelect");
       const modelInputEl = document.getElementById("modelInput");
@@ -343,6 +366,9 @@
       let defaultProviderId = "zhipu";
       let currentProviderId = "";
       let previewEnabled = false;
+      let tipNotice = "";
+      let tipNoticeLevel = "info";
+      let tipNoticeTimer = 0;
 
       function createSessionId() {
         if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -597,6 +623,131 @@
         return providerCatalog[0]?.id || "zhipu";
       }
 
+      function showTipNotice(message, level = "info") {
+        tipNotice = typeof message === "string" ? message.trim() : "";
+        tipNoticeLevel = level === "error" ? "error" : "info";
+
+        if (tipNoticeTimer) {
+          clearTimeout(tipNoticeTimer);
+          tipNoticeTimer = 0;
+        }
+
+        updateTip();
+        if (!tipNotice) {
+          return;
+        }
+
+        tipNoticeTimer = window.setTimeout(() => {
+          tipNotice = "";
+          tipNoticeLevel = "info";
+          tipNoticeTimer = 0;
+          updateTip();
+        }, 2600);
+      }
+
+      async function copyTextToClipboard(text) {
+        if (typeof text !== "string" || !text.trim()) {
+          return false;
+        }
+
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+          try {
+            await navigator.clipboard.writeText(text);
+            return true;
+          } catch {
+            // fallback to execCommand
+          }
+        }
+
+        const fallbackInput = document.createElement("textarea");
+        fallbackInput.value = text;
+        fallbackInput.setAttribute("readonly", "");
+        fallbackInput.style.position = "fixed";
+        fallbackInput.style.opacity = "0";
+        fallbackInput.style.left = "-9999px";
+        document.body.appendChild(fallbackInput);
+        fallbackInput.select();
+
+        let copied = false;
+        try {
+          copied = document.execCommand("copy");
+        } catch {
+          copied = false;
+        }
+
+        fallbackInput.remove();
+        return copied;
+      }
+
+      function buildConversationExportText() {
+        const providerId = getCurrentProviderId();
+        const provider = getProviderById(providerId);
+        const providerName = provider ? provider.name : providerId;
+        const model =
+          sanitizeModel(modelInputEl.value) ||
+          getRecommendedModel(providerId, thinkingToggleEl.checked) ||
+          "-";
+        const lines = [
+          "多模型 AI 助手对话记录",
+          `导出时间：${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+          `会话 ID：${sessionId || "-"}`,
+          `提供商：${providerName}`,
+          `模型：${model}`,
+          `思考模式：${thinkingToggleEl.checked ? "开启" : "关闭"}`,
+          "",
+          "对话内容："
+        ];
+
+        if (history.length === 0) {
+          lines.push("（暂无对话内容）");
+          return lines.join("\n");
+        }
+
+        for (let i = 0; i < history.length; i += 1) {
+          const item = history[i];
+          const roleName = item.role === "user" ? "用户" : "助手";
+          lines.push(`${i + 1}. ${roleName}`);
+          lines.push(item.content);
+          lines.push("");
+        }
+
+        return lines.join("\n").trimEnd();
+      }
+
+      async function copyConversation() {
+        const copied = await copyTextToClipboard(buildConversationExportText());
+        if (copied) {
+          showTipNotice("对话已复制到剪贴板");
+        } else {
+          showTipNotice("复制失败，请手动复制对话内容", "error");
+        }
+      }
+
+      async function shareConversation() {
+        const text = buildConversationExportText();
+        if (typeof navigator.share === "function") {
+          try {
+            await navigator.share({
+              title: "多模型 AI 助手对话",
+              text
+            });
+            showTipNotice("已打开系统分享面板");
+            return;
+          } catch (err) {
+            if (err && err.name === "AbortError") {
+              return;
+            }
+          }
+        }
+
+        const copied = await copyTextToClipboard(text);
+        if (copied) {
+          showTipNotice("当前浏览器不支持系统分享，已复制对话");
+        } else {
+          showTipNotice("分享失败，请手动复制对话内容", "error");
+        }
+      }
+
       function updateTip() {
         const shortId = sessionId ? sessionId.slice(0, 8) : "-";
         const providerId = getCurrentProviderId();
@@ -604,7 +755,9 @@
         const providerName = provider ? provider.name : providerId;
         const model = sanitizeModel(modelInputEl.value) || "-";
         const thinkingText = thinkingToggleEl.checked ? "思考开启" : "思考关闭";
-        tipEl.textContent = `当前会话：${shortId} · ${providerName} · ${model} · ${thinkingText} · 已缓存 ${history.length} 条消息`;
+        const summaryText = `当前会话：${shortId} · ${providerName} · ${model} · ${thinkingText} · 已缓存 ${history.length} 条消息`;
+        tipEl.textContent = tipNotice ? `${summaryText} · ${tipNotice}` : summaryText;
+        tipEl.style.color = tipNoticeLevel === "error" ? "#991b1b" : "";
       }
 
       function saveState() {
@@ -819,6 +972,8 @@
         updatePreviewPanel();
         sendBtn.disabled = true;
         previewBtnEl.disabled = true;
+        copyBtn.disabled = true;
+        shareBtn.disabled = true;
         resetBtn.disabled = true;
         providerSelectEl.disabled = true;
         modelInputEl.disabled = true;
@@ -1007,6 +1162,8 @@
         } finally {
           sendBtn.disabled = false;
           previewBtnEl.disabled = false;
+          copyBtn.disabled = false;
+          shareBtn.disabled = false;
           resetBtn.disabled = false;
           providerSelectEl.disabled = false;
           modelInputEl.disabled = false;
@@ -1043,6 +1200,14 @@
       previewBtnEl.addEventListener("click", () => {
         setPreviewEnabled(!previewEnabled);
         saveState();
+      });
+
+      copyBtn.addEventListener("click", async () => {
+        await copyConversation();
+      });
+
+      shareBtn.addEventListener("click", async () => {
+        await shareConversation();
       });
 
       formEl.addEventListener("submit", async (e) => {
