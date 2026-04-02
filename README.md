@@ -5,6 +5,7 @@
 - 后端代理调用国内 OpenAI 兼容 API，避免在浏览器暴露 API Key
 - 支持多轮会话（`sessionId`）、新对话重置、流式输出
 - 支持思考过程流（`reasoning` 事件，视上游模型是否返回）
+- 支持可开关的联网搜索（Tavily），并向前端返回参考来源
 
 ## 1. 配置 API Key
 
@@ -39,6 +40,12 @@ MOONSHOT_MODEL=moonshot-v1-8k
 MOONSHOT_THINKING_MODEL=moonshot-v1-8k
 MOONSHOT_URL=https://api.moonshot.cn/v1/chat/completions
 
+TAVILY_API_KEY=your_tavily_api_key
+TAVILY_URL=https://api.tavily.com/search
+TAVILY_SEARCH_DEPTH=basic
+WEB_SEARCH_DEFAULT_ENABLED=false
+WEB_SEARCH_MAX_RESULTS=5
+
 PORT=3000
 MAX_CONTEXT_MESSAGES=20
 SESSION_TTL_MS=7200000
@@ -51,6 +58,9 @@ SESSION_TTL_MS=7200000
 - `DEFAULT_TEMPERATURE`：默认温度参数
 - `MAX_CONTEXT_MESSAGES`：每个会话保留的上下文消息数量（user/assistant/system）
 - `SESSION_TTL_MS`：会话在服务端内存中的过期时间（毫秒）
+- `TAVILY_API_KEY`：联网搜索 API Key（为空时前端会显示“联网搜索未配置”）
+- `WEB_SEARCH_DEFAULT_ENABLED`：前端默认是否开启联网搜索
+- `WEB_SEARCH_MAX_RESULTS`：单次搜索注入模型上下文的最大来源数（1~10）
 
 ## 2. 启动
 
@@ -66,9 +76,11 @@ npm start
 - 选择 API 提供商
 - 手动填写模型
 - 开关“思考模式”
+- 开关“联网搜索”（服务端已配置 Tavily 时可用）
 - 输入区“预览”按钮（发送前预览消息内容）
 - 工具栏“复制对话 / 分享对话”（分享不支持时自动降级为复制）
 - 流式显示回答和思考过程（若上游返回）
+- 流式显示联网检索来源（`search` 事件）
 - 流式渲染按帧刷新，减少逐 token 卡顿感
 
 状态会保存在 `localStorage`（会话、历史、模型设置）。
@@ -89,6 +101,12 @@ npm start
 ```json
 {
   "defaultProvider": "zhipu",
+  "webSearch": {
+    "provider": "tavily",
+    "configured": true,
+    "defaultEnabled": false,
+    "maxResults": 5
+  },
   "providers": [
     {
       "id": "zhipu",
@@ -110,6 +128,7 @@ npm start
   "provider": "deepseek",
   "model": "deepseek-chat",
   "enableThinking": true,
+  "enableWebSearch": true,
   "history": [
     { "role": "user", "content": "上一轮" },
     { "role": "assistant", "content": "上一轮回复" }
@@ -122,6 +141,17 @@ npm start
 {
   "reply": "模型回复",
   "reasoning": "可选，思考内容",
+  "sources": [
+    { "title": "来源标题", "url": "https://example.com", "snippet": "来源摘要" }
+  ],
+  "webSearch": {
+    "enabled": true,
+    "configured": true,
+    "query": "联网检索词",
+    "sources": [
+      { "title": "来源标题", "url": "https://example.com", "snippet": "来源摘要" }
+    ]
+  },
   "sessionId": "服务端确认后的会话ID",
   "provider": "deepseek",
   "model": "deepseek-chat"
@@ -133,9 +163,10 @@ npm start
 
 ```json
 { "type": "session", "sessionId": "会话ID", "provider": "qwen", "model": "qwen-plus" }
+{ "type": "search", "enabled": true, "configured": true, "sources": [{ "title": "来源标题", "url": "https://example.com", "snippet": "来源摘要" }] }
 { "type": "reasoning", "delta": "思考增量" }
 { "type": "delta", "delta": "回答增量" }
-{ "type": "done", "reply": "完整回复", "reasoning": "可选", "sessionId": "会话ID" }
+{ "type": "done", "reply": "完整回复", "reasoning": "可选", "sources": [{ "title": "来源标题", "url": "https://example.com", "snippet": "来源摘要" }], "sessionId": "会话ID" }
 { "type": "error", "error": "错误信息" }
 ```
 
@@ -164,6 +195,25 @@ npm start
 后续每次代码改动，必须在本节追加一条记录，并包含两部分：
 - `如何添加`：改了哪些文件、增加了哪些关键逻辑/按钮/接口
 - `如何完成`：如何验证改动有效（最少写明语法检查、关键交互验证）
+
+### 2026-04-02：新增“联网搜索（Tavily）”
+
+- 如何添加：
+  - 后端 `server.js` 新增 Tavily 配置读取（`TAVILY_API_KEY` 等）与联网检索逻辑。
+  - `POST /api/chat`、`POST /api/chat/stream` 新增 `enableWebSearch` 入参。
+  - 聊天请求会在开启联网搜索时先检索，再将来源摘要注入 `system` 上下文后调用模型。
+  - 流式接口新增 `search` 事件；`/api/chat` 与 `done` 事件新增 `sources` 和 `webSearch` 元数据。
+  - `GET /api/providers` 返回 `webSearch` 配置（是否已配置、默认开关、最大来源数）。
+  - 前端 `public/index.html` 增加“联网搜索”开关、状态持久化、流式来源渲染和提示文案。
+  - `.env.example` 增加 Tavily 与联网搜索相关配置项。
+
+- 如何完成：
+  - 运行 `node --check server.js`，确认后端语法通过。
+  - 运行 `node -e` 提取并编译 `public/index.html` 内联脚本，确认前端脚本语法通过。
+  - 代码走查确认：
+    - 开关状态可保存并参与请求体。
+    - 流式 `search` 事件可展示来源。
+    - 未配置 `TAVILY_API_KEY` 时会降级并提示，不影响主回答链路。
 
 ### 2026-04-01：新增“复制对话 / 分享对话”
 

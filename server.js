@@ -49,6 +49,17 @@ const MAX_CONTEXT_MESSAGES = Number.parseInt(process.env.MAX_CONTEXT_MESSAGES ||
 const SESSION_TTL_MS =
   Number.parseInt(process.env.SESSION_TTL_MS || `${1000 * 60 * 60 * 2}`, 10);
 const DEFAULT_TEMPERATURE = Number.parseFloat(process.env.DEFAULT_TEMPERATURE || "0.7");
+const WEB_SEARCH_DEFAULT_ENABLED = normalizeBoolean(process.env.WEB_SEARCH_DEFAULT_ENABLED);
+const WEB_SEARCH_MAX_RESULTS = normalizeIntegerInRange(
+  process.env.WEB_SEARCH_MAX_RESULTS,
+  5,
+  1,
+  10
+);
+const TAVILY_API_KEY = (process.env.TAVILY_API_KEY || "").trim();
+const TAVILY_URL = process.env.TAVILY_URL || "https://api.tavily.com/search";
+const TAVILY_SEARCH_DEPTH = normalizeTavilySearchDepth(process.env.TAVILY_SEARCH_DEPTH);
+const WEB_SEARCH_CONFIGURED = Boolean(TAVILY_API_KEY);
 
 const PROVIDERS = {
   zhipu: {
@@ -278,6 +289,93 @@ function normalizeBoolean(value) {
   return false;
 }
 
+function normalizeIntegerInRange(value, fallback, min, max) {
+  const parsed = Number.parseInt(`${value ?? ""}`, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  if (parsed < min) {
+    return min;
+  }
+  if (parsed > max) {
+    return max;
+  }
+  return parsed;
+}
+
+function normalizeTavilySearchDepth(value) {
+  if (typeof value !== "string") {
+    return "basic";
+  }
+
+  const depth = value.trim().toLowerCase();
+  return depth === "advanced" ? "advanced" : "basic";
+}
+
+function resolveWebSearchEnabled(value) {
+  if (typeof value === "undefined" || value === null || value === "") {
+    return WEB_SEARCH_DEFAULT_ENABLED;
+  }
+  return normalizeBoolean(value);
+}
+
+function sanitizeSearchText(value, maxLength = 320) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength)}...`;
+}
+
+function sanitizeSourceUrl(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "";
+    }
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeSearchSource(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const url = sanitizeSourceUrl(raw.url || raw.link || "");
+  if (!url) {
+    return null;
+  }
+
+  const title = sanitizeSearchText(raw.title || raw.name || "", 180);
+  const snippet = sanitizeSearchText(raw.content || raw.snippet || raw.description || "", 360);
+  return {
+    title: title || url,
+    url,
+    snippet
+  };
+}
+
 function normalizeSessionId(value) {
   if (typeof value !== "string") {
     return "";
@@ -438,6 +536,140 @@ async function extractUpstreamError(resp) {
   }
 }
 
+async function runTavilySearch(query, maxResults) {
+  const response = await fetch(TAVILY_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      api_key: TAVILY_API_KEY,
+      query,
+      search_depth: TAVILY_SEARCH_DEPTH,
+      include_answer: false,
+      include_raw_content: false,
+      max_results: maxResults
+    })
+  });
+
+  if (!response.ok) {
+    const errorMessage = await extractUpstreamError(response);
+    throw new Error(errorMessage || "Web search request failed");
+  }
+
+  const data = await response.json();
+  const rawResults = Array.isArray(data?.results) ? data.results : [];
+  const sources = [];
+  const seen = new Set();
+
+  for (const rawResult of rawResults) {
+    const source = normalizeSearchSource(rawResult);
+    if (!source) {
+      continue;
+    }
+    if (seen.has(source.url)) {
+      continue;
+    }
+    seen.add(source.url);
+    sources.push(source);
+    if (sources.length >= maxResults) {
+      break;
+    }
+  }
+
+  return sources;
+}
+
+async function collectWebSearchContext(enableWebSearch, userMessage) {
+  const context = {
+    enabled: Boolean(enableWebSearch),
+    configured: WEB_SEARCH_CONFIGURED,
+    query: "",
+    sources: [],
+    error: ""
+  };
+
+  if (!context.enabled) {
+    return context;
+  }
+
+  if (!context.configured) {
+    context.error = "Server missing TAVILY_API_KEY";
+    return context;
+  }
+
+  const query = sanitizeSearchText(userMessage, 220);
+  if (!query) {
+    context.error = "Search query is empty";
+    return context;
+  }
+  context.query = query;
+
+  try {
+    context.sources = await runTavilySearch(query, WEB_SEARCH_MAX_RESULTS);
+  } catch (err) {
+    context.error = err?.message || "Web search failed";
+  }
+
+  return context;
+}
+
+function buildSearchContextSystemMessage(webSearchContext) {
+  if (!webSearchContext?.sources?.length) {
+    return "";
+  }
+
+  const query = sanitizeSearchText(webSearchContext.query, 220);
+  const lines = [
+    "The system just ran a web search. Use the sources below as references.",
+    `Search time (UTC): ${new Date().toISOString()}`,
+    query ? `Search query: ${query}` : ""
+  ].filter(Boolean);
+
+  webSearchContext.sources.forEach((source, index) => {
+    lines.push(`Source[${index + 1}] Title: ${source.title}`);
+    lines.push(`Source[${index + 1}] URL: ${source.url}`);
+    if (source.snippet) {
+      lines.push(`Source[${index + 1}] Snippet: ${source.snippet}`);
+    }
+  });
+
+  lines.push("Do not fabricate sources or links. If evidence is insufficient, say so.");
+  return lines.join("\n");
+}
+
+function buildMessagesForUpstream(contextMessages, userMessage, webSearchContext) {
+  const messages = [...contextMessages];
+  const searchSystemPrompt = buildSearchContextSystemMessage(webSearchContext);
+  if (searchSystemPrompt) {
+    messages.push({ role: "system", content: searchSystemPrompt });
+  }
+  messages.push({ role: "user", content: userMessage });
+  return messages;
+}
+
+function buildWebSearchPayload(webSearchContext) {
+  return {
+    enabled: Boolean(webSearchContext?.enabled),
+    configured: Boolean(webSearchContext?.configured),
+    query: webSearchContext?.query || undefined,
+    sources:
+      Array.isArray(webSearchContext?.sources) && webSearchContext.sources.length
+        ? webSearchContext.sources
+        : undefined,
+    error: webSearchContext?.error || undefined
+  };
+}
+
+function buildWebSearchClientConfig() {
+  return {
+    provider: "tavily",
+    configured: WEB_SEARCH_CONFIGURED,
+    defaultEnabled: WEB_SEARCH_CONFIGURED ? WEB_SEARCH_DEFAULT_ENABLED : false,
+    maxResults: WEB_SEARCH_MAX_RESULTS
+  };
+}
+
 function upsertSession(sessionId, initialHistory) {
   const existing = sessions.get(sessionId);
   if (existing) {
@@ -553,6 +785,7 @@ async function handleChat(req, res) {
   }
 
   const { providerId, provider, model, enableThinking } = providerResult;
+  const enableWebSearch = resolveWebSearchEnabled(body.enableWebSearch);
 
   cleanupExpiredSessions();
 
@@ -564,7 +797,8 @@ async function handleChat(req, res) {
   const history = Array.isArray(body.history) ? body.history : [];
   const session = upsertSession(sessionId, history);
   const contextMessages = session.messages.slice(-MAX_CONTEXT_MESSAGES);
-  const messages = [...contextMessages, { role: "user", content: userMessage }];
+  const webSearchContext = await collectWebSearchContext(enableWebSearch, userMessage);
+  const messages = buildMessagesForUpstream(contextMessages, userMessage, webSearchContext);
   const upstreamPayload = buildUpstreamRequestBody({
     providerId,
     messages,
@@ -603,7 +837,9 @@ async function handleChat(req, res) {
       reasoning: reasoning || undefined,
       sessionId,
       provider: providerId,
-      model
+      model,
+      sources: webSearchContext.sources.length ? webSearchContext.sources : undefined,
+      webSearch: buildWebSearchPayload(webSearchContext)
     });
   } catch (err) {
     sendJson(res, 500, { error: err.message || "Server error" });
@@ -632,6 +868,7 @@ async function handleChatStream(req, res) {
   }
 
   const { providerId, provider, model, enableThinking } = providerResult;
+  const enableWebSearch = resolveWebSearchEnabled(body.enableWebSearch);
 
   cleanupExpiredSessions();
 
@@ -643,7 +880,8 @@ async function handleChatStream(req, res) {
   const history = Array.isArray(body.history) ? body.history : [];
   const session = upsertSession(sessionId, history);
   const contextMessages = session.messages.slice(-MAX_CONTEXT_MESSAGES);
-  const messages = [...contextMessages, { role: "user", content: userMessage }];
+  const webSearchContext = await collectWebSearchContext(enableWebSearch, userMessage);
+  const messages = buildMessagesForUpstream(contextMessages, userMessage, webSearchContext);
   const upstreamPayload = buildUpstreamRequestBody({
     providerId,
     messages,
@@ -687,6 +925,12 @@ async function handleChatStream(req, res) {
     }
 
     writeSseEvent(res, { type: "session", sessionId, provider: providerId, model });
+    if (enableWebSearch) {
+      writeSseEvent(res, {
+        type: "search",
+        ...buildWebSearchPayload(webSearchContext)
+      });
+    }
 
     // Fallback for non-SSE providers: emit a single delta and done.
     const upstreamType = (aiResp.headers.get("content-type") || "").toLowerCase();
@@ -704,7 +948,16 @@ async function handleChatStream(req, res) {
         writeSseEvent(res, { type: "reasoning", delta: reasoning });
       }
       writeSseEvent(res, { type: "delta", delta: reply });
-      writeSseEvent(res, { type: "done", reply, reasoning, sessionId, provider: providerId, model });
+      writeSseEvent(res, {
+        type: "done",
+        reply,
+        reasoning,
+        sessionId,
+        provider: providerId,
+        model,
+        sources: webSearchContext.sources.length ? webSearchContext.sources : undefined,
+        webSearch: buildWebSearchPayload(webSearchContext)
+      });
       res.end();
       return;
     }
@@ -803,7 +1056,9 @@ async function handleChatStream(req, res) {
       reasoning: reasoning.trim() || undefined,
       sessionId,
       provider: providerId,
-      model
+      model,
+      sources: webSearchContext.sources.length ? webSearchContext.sources : undefined,
+      webSearch: buildWebSearchPayload(webSearchContext)
     });
     res.end();
   } catch (err) {
@@ -880,7 +1135,8 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && parsed.pathname === "/api/providers") {
     sendJson(res, 200, {
       defaultProvider: DEFAULT_PROVIDER,
-      providers: listProvidersForClient()
+      providers: listProvidersForClient(),
+      webSearch: buildWebSearchClientConfig()
     });
     return;
   }
@@ -912,3 +1168,4 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`Server running at http://127.0.0.1:${PORT}`);
 });
+

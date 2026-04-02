@@ -68,7 +68,7 @@
 
       .settings {
         display: grid;
-        grid-template-columns: 180px 1fr auto;
+        grid-template-columns: 180px 1fr auto auto;
         gap: 10px;
         padding: 10px 14px;
         border-bottom: 1px solid var(--border);
@@ -138,6 +138,13 @@
         background: #fff7ed;
         border: 1px dashed #fdba74;
         color: #7c2d12;
+        font-size: 13px;
+      }
+
+      .search {
+        background: #ecfeff;
+        border: 1px solid #a5f3fc;
+        color: #0f172a;
         font-size: 13px;
       }
 
@@ -287,6 +294,13 @@
             思考模式
           </span>
         </label>
+
+        <label class="switch">
+          <span class="switch-inner">
+            <input id="webSearchToggle" type="checkbox" />
+            联网搜索
+          </span>
+        </label>
       </div>
 
       <div id="messages" class="messages"></div>
@@ -305,7 +319,7 @@
     </div>
 
     <script>
-      const STORAGE_KEY = "simple_ai_chat_state_v2";
+      const STORAGE_KEY = "simple_ai_chat_state_v3";
       const LEGACY_STORAGE_KEY = "simple_ai_chat_state_v1";
       const SESSION_ID_RE = /^[a-zA-Z0-9_-]{8,128}$/;
       const MAX_LOCAL_HISTORY = 20;
@@ -342,7 +356,13 @@
             defaultModel: "moonshot-v1-8k",
             thinkingModel: "moonshot-v1-8k"
           }
-        ]
+        ],
+        webSearch: {
+          provider: "tavily",
+          configured: false,
+          defaultEnabled: false,
+          maxResults: 5
+        }
       };
 
       const messagesEl = document.getElementById("messages");
@@ -359,12 +379,19 @@
       const providerSelectEl = document.getElementById("providerSelect");
       const modelInputEl = document.getElementById("modelInput");
       const thinkingToggleEl = document.getElementById("thinkingToggle");
+      const webSearchToggleEl = document.getElementById("webSearchToggle");
 
       const history = [];
       let sessionId = "";
       let providerCatalog = [];
       let defaultProviderId = "zhipu";
       let currentProviderId = "";
+      let webSearchConfig = {
+        provider: "tavily",
+        configured: false,
+        defaultEnabled: false,
+        maxResults: 5
+      };
       let previewEnabled = false;
       let tipNotice = "";
       let tipNoticeLevel = "info";
@@ -447,6 +474,64 @@
         messagesEl.appendChild(node);
         messagesEl.scrollTop = messagesEl.scrollHeight;
         return node;
+      }
+
+      function insertMessageBefore(referenceNode, role, content) {
+        const node = document.createElement("div");
+        node.className = `msg ${role}`;
+        node.textContent = content;
+        messagesEl.insertBefore(node, referenceNode || null);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return node;
+      }
+
+      function sanitizeSearchSources(raw) {
+        if (!Array.isArray(raw)) {
+          return [];
+        }
+
+        const sources = [];
+        for (const item of raw) {
+          if (!item || typeof item !== "object") {
+            continue;
+          }
+
+          const url = typeof item.url === "string" ? item.url.trim() : "";
+          if (!/^https?:\/\//i.test(url)) {
+            continue;
+          }
+
+          const title =
+            typeof item.title === "string" && item.title.trim() ? item.title.trim() : url;
+          const snippet =
+            typeof item.snippet === "string" && item.snippet.trim() ? item.snippet.trim() : "";
+          sources.push({ title, url, snippet });
+          if (sources.length >= 10) {
+            break;
+          }
+        }
+
+        return sources;
+      }
+
+      function formatSearchSourcesText(sources) {
+        if (!Array.isArray(sources) || sources.length === 0) {
+          return "";
+        }
+
+        const lines = ["联网检索参考来源："];
+        for (let i = 0; i < sources.length; i += 1) {
+          const source = sources[i];
+          lines.push(`${i + 1}. ${source.title}`);
+          lines.push(source.url);
+          if (source.snippet) {
+            lines.push(source.snippet);
+          }
+          if (i < sources.length - 1) {
+            lines.push("");
+          }
+        }
+        return lines.join("\n");
       }
 
       function updatePreviewPanel() {
@@ -694,6 +779,13 @@
           `提供商：${providerName}`,
           `模型：${model}`,
           `思考模式：${thinkingToggleEl.checked ? "开启" : "关闭"}`,
+          `联网搜索：${
+            webSearchConfig.configured
+              ? webSearchToggleEl.checked
+                ? "开启"
+                : "关闭"
+              : "未配置"
+          }`,
           "",
           "对话内容："
         ];
@@ -755,7 +847,12 @@
         const providerName = provider ? provider.name : providerId;
         const model = sanitizeModel(modelInputEl.value) || "-";
         const thinkingText = thinkingToggleEl.checked ? "思考开启" : "思考关闭";
-        const summaryText = `当前会话：${shortId} · ${providerName} · ${model} · ${thinkingText} · 已缓存 ${history.length} 条消息`;
+        const webSearchText = webSearchConfig.configured
+          ? webSearchToggleEl.checked
+            ? "联网搜索开启"
+            : "联网搜索关闭"
+          : "联网搜索未配置";
+        const summaryText = `当前会话：${shortId} · ${providerName} · ${model} · ${thinkingText} · ${webSearchText} · 已缓存 ${history.length} 条消息`;
         tipEl.textContent = tipNotice ? `${summaryText} · ${tipNotice}` : summaryText;
         tipEl.style.color = tipNoticeLevel === "error" ? "#991b1b" : "";
       }
@@ -770,6 +867,7 @@
               providerId: getCurrentProviderId(),
               model: sanitizeModel(modelInputEl.value),
               enableThinking: Boolean(thinkingToggleEl.checked),
+              enableWebSearch: Boolean(webSearchToggleEl.checked),
               previewEnabled: Boolean(previewEnabled)
             }
           })
@@ -794,6 +892,7 @@
           providerId: "",
           model: "",
           enableThinking: false,
+          enableWebSearch: null,
           previewEnabled: false
         };
 
@@ -814,6 +913,9 @@
             state.model = sanitizeModel(settings.model);
           }
           state.enableThinking = Boolean(settings.enableThinking);
+          if (typeof settings.enableWebSearch === "boolean") {
+            state.enableWebSearch = settings.enableWebSearch;
+          }
           state.previewEnabled = Boolean(settings.previewEnabled);
         }
 
@@ -833,6 +935,22 @@
         if (history.length === 0) {
           appendMessage("assistant", "你好，我是你的 AI 助手。你可以切换 API 提供商、模型和思考模式。");
         }
+      }
+
+      function normalizeWebSearchPayload(raw) {
+        const configured = Boolean(raw?.configured);
+        const defaultEnabled = configured && Boolean(raw?.defaultEnabled);
+        const provider =
+          typeof raw?.provider === "string" && raw.provider.trim()
+            ? raw.provider.trim()
+            : "tavily";
+        const maxResults = Number.parseInt(raw?.maxResults ?? "5", 10);
+        return {
+          provider,
+          configured,
+          defaultEnabled,
+          maxResults: Number.isFinite(maxResults) && maxResults > 0 ? maxResults : 5
+        };
       }
 
       function normalizeProviderPayload(data) {
@@ -855,7 +973,8 @@
         return {
           providers,
           defaultProvider:
-            typeof data?.defaultProvider === "string" ? data.defaultProvider.trim().toLowerCase() : ""
+            typeof data?.defaultProvider === "string" ? data.defaultProvider.trim().toLowerCase() : "",
+          webSearch: normalizeWebSearchPayload(data?.webSearch)
         };
       }
 
@@ -887,12 +1006,14 @@
           const fallback = normalizeProviderPayload(FALLBACK_PROVIDER_DATA);
           providerCatalog = fallback.providers;
           defaultProviderId = fallback.defaultProvider || fallback.providers[0]?.id || "zhipu";
+          webSearchConfig = fallback.webSearch;
         } else {
           providerCatalog = normalized.providers;
           defaultProviderId =
             sanitizeProviderId(normalized.defaultProvider, providerCatalog) ||
             providerCatalog[0]?.id ||
             "zhipu";
+          webSearchConfig = normalized.webSearch;
         }
 
         fillProviderSelect();
@@ -913,6 +1034,22 @@
         const recommendedModel = getRecommendedModel(providerId, thinkingToggleEl.checked);
         const storedModel = sanitizeModel(initialSettings.model);
         modelInputEl.value = storedModel || recommendedModel;
+
+        const canUseWebSearch = Boolean(webSearchConfig.configured);
+        const storedWebSearch =
+          typeof initialSettings.enableWebSearch === "boolean"
+            ? initialSettings.enableWebSearch
+            : null;
+        webSearchToggleEl.checked = canUseWebSearch
+          ? storedWebSearch === null
+            ? Boolean(webSearchConfig.defaultEnabled)
+            : storedWebSearch
+          : false;
+        webSearchToggleEl.disabled = !canUseWebSearch;
+        webSearchToggleEl.title = canUseWebSearch
+          ? ""
+          : "服务端未配置 TAVILY_API_KEY，无法使用联网搜索";
+
         setPreviewEnabled(Boolean(initialSettings.previewEnabled));
       }
 
@@ -961,6 +1098,7 @@
           appendMessage("assistant error", "错误：当前模型为空，请先填写模型名称");
           return;
         }
+        const enableWebSearch = Boolean(webSearchConfig.configured && webSearchToggleEl.checked);
 
         modelInputEl.value = model;
 
@@ -978,6 +1116,7 @@
         providerSelectEl.disabled = true;
         modelInputEl.disabled = true;
         thinkingToggleEl.disabled = true;
+        webSearchToggleEl.disabled = true;
         saveState();
 
         const reasoningNode = appendMessage("assistant reasoning", "");
@@ -993,6 +1132,8 @@
         let reasoningText = "";
         let streamDone = false;
         let streamError = "";
+        let searchNode = null;
+        let searchSources = [];
 
         try {
           const resp = await fetch("/api/chat/stream", {
@@ -1004,7 +1145,8 @@
               history,
               provider: providerId,
               model,
-              enableThinking: thinkingToggleEl.checked
+              enableThinking: thinkingToggleEl.checked,
+              enableWebSearch
             })
           });
 
@@ -1045,6 +1187,28 @@
               if (reasoningText.trim()) {
                 reasoningNode.style.display = "";
                 reasoningRenderer.push(payload.delta);
+              }
+              return;
+            }
+
+            if (payload.type === "search") {
+              const payloadSources = sanitizeSearchSources(payload.sources);
+              if (payloadSources.length > 0) {
+                searchSources = payloadSources;
+                const sourceText = formatSearchSourcesText(payloadSources);
+                if (sourceText) {
+                  if (!searchNode) {
+                    searchNode = insertMessageBefore(reasoningNode, "assistant search", sourceText);
+                  } else {
+                    updateMessage(searchNode, sourceText);
+                  }
+                }
+              }
+
+              if (payload.configured === false) {
+                showTipNotice("联网搜索未配置：请在服务端配置 TAVILY_API_KEY", "error");
+              } else if (typeof payload.error === "string" && payload.error.trim()) {
+                showTipNotice(`联网搜索失败：${payload.error.trim()}`, "error");
               }
               return;
             }
@@ -1090,6 +1254,19 @@
                 const nextModel = sanitizeModel(payload.model);
                 if (nextModel) {
                   modelInputEl.value = nextModel;
+                }
+              }
+
+              const payloadSources = sanitizeSearchSources(payload.sources);
+              if (!searchSources.length && payloadSources.length > 0) {
+                searchSources = payloadSources;
+                const sourceText = formatSearchSourcesText(payloadSources);
+                if (sourceText) {
+                  if (!searchNode) {
+                    searchNode = insertMessageBefore(reasoningNode, "assistant search", sourceText);
+                  } else {
+                    updateMessage(searchNode, sourceText);
+                  }
                 }
               }
 
@@ -1168,10 +1345,10 @@
           providerSelectEl.disabled = false;
           modelInputEl.disabled = false;
           thinkingToggleEl.disabled = false;
+          webSearchToggleEl.disabled = !webSearchConfig.configured;
           inputEl.focus();
         }
       }
-
       providerSelectEl.addEventListener("change", () => {
         const previousProviderId = currentProviderId || getCurrentProviderId();
         const previousRecommended = getRecommendedModel(previousProviderId, thinkingToggleEl.checked);
@@ -1189,6 +1366,13 @@
         const previousRecommended = getRecommendedModel(providerId, !thinkingToggleEl.checked);
         const nextRecommended = getRecommendedModel(providerId, thinkingToggleEl.checked);
         syncModelWhenPresetChanged(previousRecommended, nextRecommended);
+        saveState();
+      });
+
+      webSearchToggleEl.addEventListener("change", () => {
+        if (!webSearchConfig.configured) {
+          webSearchToggleEl.checked = false;
+        }
         saveState();
       });
 
